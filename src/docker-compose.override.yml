@@ -1,0 +1,248 @@
+version: '3.4'
+
+services:
+  mongo:
+    container_name: mongo
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${Mongo_UserName}
+      - MONGO_INITDB_ROOT_PASSWORD=${Mongo_Password}
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+      - mongo_data:/data/configdb
+
+  redis:
+    container_name: redis
+    restart: always
+    ports:
+      - "6379:6370"
+    volumes:
+      - redis_data:/data
+
+  postgres:
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=${Postgres_UserName}
+      - POSTGRES_PASSWORD=${Postgres_Password}
+      - POSTGRES_DB=DiscountDB
+    restart: always
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  mssql:
+    container_name: mssql
+    environment:
+      - SA_PASSWORD=${MSSQL_SAPassword}
+      - ACCEPT_EULA=Y
+    restart: always
+    ports:
+      - "11433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql/data
+
+  rabbitmq:
+    container_name: rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RabbitMQ_UserName}
+      - RABBITMQ_DEFAULT_PASS=${RabbitMQ_Password}
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  pgadmin:
+    container_name: pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGAdmin_Email}
+      - PGADMIN_DEFAULT_PASSWORD=${PGAdmin_Password}
+    restart: always
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/root/.pgadmin
+      - pgadmin_data:/var/lib/pgadmin
+
+  mongo.express:
+    container_name: mongo.express
+    environment:
+      - ME_CONFIG_OPTIONS_EDITORTHEME=ambiance
+      - ME_CONFIG_MONGODB_SERVER=mongo
+      - ME_CONFIG_BASICAUTH_USERNAME=${Mongo_Exress_UserName}
+      - ME_CONFIG_BASICAUTH_PASSWORD=${Mongo_Exress_Password}
+      - ME_CONFIG_MONGODB_AUTH_USERNAME=${Mongo_UserName}
+      - ME_CONFIG_MONGODB_AUTH_PASSWORD=${Mongo_Password}
+    restart: always
+    depends_on:
+      - mongo
+    ports:
+      - "8081:8081"
+
+  portainer:
+    container_name: portainer
+    restart: always
+    ports:
+      - "8080:8000"
+      - "9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+
+  elasticsearch:
+    container_name: elasticsearch
+    environment:
+      - http.host=0.0.0.0
+      - transport.host=localhost
+      - network.host=0.0.0.0
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    mem_limit: 1g
+
+  graylog:
+    container_name: graylog
+    environment: 
+      - GRAYLOG_PASSWORD_SECRET=${GRAYLOG_Password_Secret}
+      - GRAYLOG_ROOT_PASSWORD_SHA2=${GRAYLOG_Root_Password_SHA2}
+      - GRAYLOG_MONGODB_URI=mongodb://${Mongo_UserName}:${Mongo_Password}@mongo:27017/graylog?authSource=${Mongo_UserName}
+    restart: always
+    depends_on:
+      - mongo
+      - elasticsearch
+    ports:
+      # Graylog web interface and REST API
+      - 9001:9000
+      # Syslog TCP
+      #- 1514:1514
+      # Syslog UDP
+      #- 1514:1514/udp
+      # GELF TCP
+      #- 12201:12201
+      # GELF UDP
+      - 12201:12201/udp
+    volumes:
+      - graylog_data:/usr/share/graylog/data
+
+  catalog.api:
+    container_name: catalog.api
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${Environment}
+      - DatabaseSettings__ConnectionString=mongodb://${Mongo_UserName}:${Mongo_Password}@mongo:27017
+      - GrayLog__Host=graylog
+      - GrayLog__Port=12201
+      - GrayLog__Protocol=UDP
+      - LogSource__LogSource=Catalog.API
+    depends_on:
+      - mongo
+      - graylog
+    ports:
+      - "8000:80"
+
+  basket.api:
+    container_name: basket.api
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${Environment}
+      - CacheSettings__ConnectionString=redis:6379
+      - GrpcSettings__DiscountUrl=http://discount.api:5003
+      - EventBusSettings__HostAddress=amqp://${RabbitMQ_UserName}:${RabbitMQ_Password}@rabbitmq:5672
+      - GrayLog__Host=graylog
+      - GrayLog__Port=12201
+      - GrayLog__Protocol=UDP
+      - LogSource__LogSource=Basket.API
+    depends_on:
+      - redis
+      - rabbitmq
+      - graylog
+    ports:
+      - "8001:80"
+
+  discount.api:
+    container_name: discount.api
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${Environment}
+      - "DatabaseSettings__ConnectionString=Server=postgres;Port=5432;Database=DiscountDB;User Id=${Postgres_UserName};Password=${Postgres_Password};"
+      - GrayLog__Host=graylog
+      - GrayLog__Port=12201
+      - GrayLog__Protocol=UDP
+      - LogSource__LogSource=Discount.API
+    depends_on:
+      - postgres
+      - graylog
+    ports:
+      - "8002:5002"
+      - "8003:5003"
+
+  ordering.api:
+    container_name: ordering.api
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${Environment}
+      - ConnectionStrings__OrderingConnectionString=Server=mssql;Database=OrderDb;User Id=sa;Password=${MSSQL_SAPassword}
+      - EventBusSettings__HostAddress=amqp://${RabbitMQ_UserName}:${RabbitMQ_Password}@rabbitmq:5672
+      - GrayLog__Host=graylog
+      - GrayLog__Port=12201
+      - GrayLog__Protocol=UDP
+      - LogSource__LogSource=Ordering.API
+    depends_on:
+     - mssql
+     - rabbitmq
+     - graylog
+    ports:
+     - "8004:80"
+
+  shopping.aggregator:
+    container_name: shopping.aggregator
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ApiSettings__CatalogUrl=http://catalog.api
+      - ApiSettings__BasketUrl=http://basket.api
+      - ApiSettings__OrderingUrl=http://ordering.api
+      - GrayLog__Host=graylog
+      - GrayLog__Port=12201
+      - GrayLog__Protocol=UDP
+      - LogSource__LogSource=Shopping.Aggregator
+    depends_on: 
+      - ordering.api
+      - basket.api
+      - catalog.api
+      - graylog
+    ports:
+      - "8005:80"
+
+  ocelotapigw:
+    container_name: ocelotapigw
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - GrayLog__Host=graylog
+      - GrayLog__Port=12201
+      - GrayLog__Protocol=UDP
+      - LogSource__LogSource=OcelotApiGw
+    depends_on:
+      - catalog.api
+      - basket.api
+      - discount.api
+      - ordering.api
+      - graylog
+    ports:
+      - "8010:80"
+
+  aspnetrunbasics:
+    container_name: aspnetrunbasics
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ApiSettings__GatewayAddress=http://ocelotapigw
+    depends_on:
+      - ocelotapigw
+      - catalog.api
+      - basket.api
+      - discount.api
+      - ordering.api
+    ports:
+      - "8006:80"
